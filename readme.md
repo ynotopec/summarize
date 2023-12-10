@@ -9,7 +9,7 @@ To install and run the code you've provided, which includes a web user interface
 1. **Clone the Git Repository or Download the Source Code**  
    If the code is hosted on a Git repository, use the following command to clone it. Otherwise, download and extract the source code into a directory of your choice.
    ```bash
-   git clone [[GIT_REPOSITORY_URL]](https://github.com/ynotopec/summarize)
+   git clone https://github.com/ynotopec/summarize
    cd summarize
    ```
 
