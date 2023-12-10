@@ -22,7 +22,7 @@ To install and run the code you've provided, which includes a web user interface
 3. **Install Dependencies**
    Install the necessary packages using pip. Ensure that the `requirements.txt` file is present in the folder.
    ```bash
-   pip install streamlit langchain python-dotenv html2text
+   pip install streamlit langchain python-dotenv
    ```
 
 4. **Set Up Environment Variables**
