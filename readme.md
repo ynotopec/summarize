@@ -9,8 +9,8 @@ To install and run the code you've provided, which includes a web user interface
 1. **Clone the Git Repository or Download the Source Code**  
    If the code is hosted on a Git repository, use the following command to clone it. Otherwise, download and extract the source code into a directory of your choice.
    ```bash
-   git clone [GIT_REPOSITORY_URL]
-   cd [DIRECTORY_NAME]
+   git clone [[GIT_REPOSITORY_URL]](https://github.com/ynotopec/summarize)
+   cd summarize
    ```
 
 2. **Create and Activate a Virtual Environment** (optional, but recommended)
@@ -31,7 +31,7 @@ To install and run the code you've provided, which includes a web user interface
 5. **Run the Streamlit App**
    Launch the application using Streamlit.
    ```bash
-   streamlit run [FILE_NAME].py
+   streamlit run app.py
    ```
 
 ### Usage
