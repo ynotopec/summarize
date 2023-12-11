@@ -1,4 +1,4 @@
-To install and run the code you've provided, which includes a web user interface with Streamlit, a summarization function using Langchain, and translation also via Langchain, you will need to follow several steps. Here is the automated installation documentation:
+To install and run this code, which includes a web user interface with Streamlit, a summarization function using Langchain, and translation also via Langchain, you will need to follow several steps. Here is the automated installation documentation:
 
 ### Prerequisites
 - Python 3.6 or later.
