@@ -22,7 +22,7 @@ To install and run this code, which includes a web user interface with Streamlit
 3. **Install Dependencies**
    Install the necessary packages using pip. Ensure that the `requirements.txt` file is present in the folder.
    ```bash
-   pip install streamlit langchain python-dotenv
+   pip install streamlit langchain python-dotenv openai bs4
    ```
 
 4. **Set Up Environment Variables**
