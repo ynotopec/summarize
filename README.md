@@ -86,8 +86,7 @@ flowchart TD
     H --> I[split_to_docs selon ctype]
     I --> J{Longueur totale < seuil ?}
     J -->|Oui| K[Prompt stuff]
-    J -->|Non| L[Adaptive map-reduce
-    (fenêtre dynamique + concurrence limitée)]
+    J -->|Non| L["Adaptive map-reduce (fenêtre dynamique + concurrence limitée)"]
     L --> M[Prompt comb]
     K --> N[Résumé final]
     M --> N
