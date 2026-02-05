@@ -68,6 +68,61 @@ Open the local URL shown by Streamlit (usually `http://localhost:8501`).
 - For long documents, the app automatically chunks text and performs a map-reduce style summary.
 - If image generation is not configured, summarization still works.
 
+## (A) Router / Decision Flow
+
+```mermaid
+flowchart TD
+    A[Input utilisateur] --> B{Type d'entrée}
+    B -->|PDF uploadé| C[read_pdf_to_text]
+    B -->|URL| D{URL valide + sûre ?}
+    D -->|Non| E[Erreur Streamlit]
+    D -->|Oui| F[load_url_to_text]
+    B -->|Texte libre| G[Texte direct]
+
+    C --> H[Cap MAX_INPUT_CHARS]
+    F --> H
+    G --> H
+
+    H --> I[split_to_docs selon ctype]
+    I --> J{Longueur totale < seuil ?}
+    J -->|Oui| K[Prompt stuff]
+    J -->|Non| L[Adaptive map-reduce
+    (fenêtre dynamique + concurrence limitée)]
+    L --> M[Prompt comb]
+    K --> N[Résumé final]
+    M --> N
+
+    N --> O[generate_thumbnail]
+    O --> P{IMAGE_API_KEY dispo ?}
+    P -->|Non| Q[Retourne uniquement image_prompt]
+    P -->|Oui| R[POST /images/generations]
+    R --> S[Thumbnail affichée]
+```
+
+## (B) Séquence — cas critique (URL non sûre / SSRF)
+
+Cas critique couvert : l'utilisateur soumet une URL interne (`localhost`, IP privée, `.local`, etc.) afin d'éviter les accès SSRF.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Utilisateur
+    participant UI as Streamlit UI
+    participant V as validators.url
+    participant S as is_public_http_url
+    participant L as WebBaseLoader
+
+    U->>UI: Saisit URL et lance le résumé
+    UI->>V: Vérifie le format URL
+    V-->>UI: URL valide
+    UI->>S: Contrôle schéma + hôte public
+    S-->>UI: URL refusée (non publique/unsafe)
+    UI-->>U: Message d'erreur "Unsupported or unsafe URL"
+
+    Note over UI,L: Aucun appel réseau au loader
+    Note over UI: Le flux s'arrête avant load_url_to_text
+```
+
 ## Troubleshooting
 
 - **No summary returned**: verify `OPENAI_API_KEY`, model name, and base URL.
