@@ -1,5 +1,5 @@
 # /home/ailab/summarize/app.py — prod-ready
-import os, io, base64, time, asyncio, ipaddress, requests, streamlit as st
+import os, base64, time, asyncio, ipaddress, requests, streamlit as st
 from io import BytesIO
 from dotenv import load_dotenv
 from PIL import Image
@@ -188,6 +188,11 @@ def summarize_text(docs, lang_code="fr", ctype_key="general"):
         return asyncio.get_event_loop().run_until_complete(res)
     return res
 
+@st.cache_data(show_spinner=False)
+def summarize_source_text(source_text: str, lang_code="fr", ctype_key="general") -> str:
+    docs = split_to_docs(source_text, ctype_key)
+    return summarize_text(docs, lang_code, ctype_key) if docs else ""
+
 # =========================
 # Image: retries + timeouts
 # =========================
@@ -276,8 +281,7 @@ if source_text and len(source_text) > MAX_INPUT_CHARS:
 
 if source_text:
     with st.spinner(f"Splitting and summarizing in {selected_lang_name}..."):
-        docs = split_to_docs(source_text, ctype_key)
-        summary = summarize_text(docs, lang_code, ctype_key) if docs else ""
+        summary = summarize_source_text(source_text, lang_code, ctype_key)
     if summary:
         col1, col2 = st.columns([3, 1], gap="large")
         with col1:
