@@ -18,9 +18,7 @@ load_dotenv()
 # =========================
 # Config (LLM texte)
 # =========================
-MODEL = os.getenv("OPENAI_API_MODEL", "qwen3-coder")
-#mistral-small-3.2")
-#qwen3-coder")
+MODEL = os.getenv("OPENAI_API_MODEL", "ai-summary")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 BASE_URL = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
 LLM_ARGS = {"model": MODEL, "temperature": 0.2}
@@ -39,7 +37,7 @@ IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "https://api.openai.com/v1")
 # App options
 # =========================
 LANGS  = {"en":"English","fr":"Français","es":"Español","de":"Deutsch"}
-CTYPES = {"general":"General Text","news":"News Article","scientific":"Scientific Paper","technical":"Technical Documentation"}
+CTYPES = {"scientific":"Scientific Paper","general":"General Text","news":"News Article","technical":"Technical Documentation"}
 
 MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "300000"))  # cap entrée pour PDF/URL
 ASYNC_CONCURRENCY = int(os.getenv("ASYNC_CONCURRENCY", "8"))  # invocations LLM simultanées
