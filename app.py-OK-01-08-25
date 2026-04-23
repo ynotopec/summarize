@@ -1,0 +1,259 @@
+# Streamlit app: summarize URL/PDF/text -> French summary + thumbnail image
+# Option B: Manual map–reduce (no load_summarize_chain kwargs), compatible with LangChain 0.2.x
+
+import os
+import requests
+from io import BytesIO
+
+import streamlit as st
+from dotenv import load_dotenv
+from PIL import Image
+from PyPDF2 import PdfReader
+import pdfplumber
+import validators
+
+from langchain.docstore.document import Document
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.prompts import PromptTemplate
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_openai import ChatOpenAI
+
+
+# --------------------
+# Config & Environment
+# --------------------
+load_dotenv()
+
+MODEL = os.getenv("OPENAI_API_MODEL", "ai-summary")  # any multilingual-capable model
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+# Accept either var name; pass through to langchain_openai as base_url
+BASE_URL = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or None
+
+IMAGE_API_URL = os.getenv(
+    "IMAGE_API_URL",
+    "https://api-txt2image.c0.ai-dev.numerique-interieur.com/generate_image/"
+)
+
+LLM_ARGS = {
+    "model": MODEL,
+    "temperature": 0.2,
+}
+if OPENAI_API_KEY:
+    LLM_ARGS["api_key"] = OPENAI_API_KEY
+if BASE_URL:
+    LLM_ARGS["base_url"] = BASE_URL
+
+
+# -------------
+# Cached Client
+# -------------
+@st.cache_resource(show_spinner=False)
+def get_llm() -> ChatOpenAI:
+    return ChatOpenAI(**LLM_ARGS)
+
+
+# ---------------
+# Cached Utilities
+# ---------------
+@st.cache_data(show_spinner=False)
+def read_pdf_to_text(file) -> str:
+    """Extract text from a PDF with PyPDF2, fallback to pdfplumber."""
+    try:
+        reader = PdfReader(file)
+        texts = []
+        for p in reader.pages:
+            t = p.extract_text() or ""
+            texts.append(t)
+        out = "\n".join(texts).strip()
+        if out:
+            return out
+    except Exception:
+        pass
+
+    try:
+        file.seek(0)
+        with pdfplumber.open(file) as pdf:
+            pages = [page.extract_text() or "" for page in pdf.pages]
+            return "\n".join(pages).strip()
+    except Exception:
+        return ""
+
+
+@st.cache_data(show_spinner=False)
+def load_url_to_text(url: str) -> str:
+    """Load a web page and return concatenated text."""
+    loader = WebBaseLoader(url)
+    docs = loader.load()
+    return "\n\n".join([d.page_content for d in docs if d.page_content])
+
+
+@st.cache_data(show_spinner=False)
+def split_to_docs(text: str):
+    """Token-aware chunking when possible; fallback to char-based."""
+    try:
+        splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+            chunk_size=2000, chunk_overlap=200
+        )
+    except Exception:
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=7000, chunk_overlap=500
+        )
+    chunks = splitter.split_text(text)
+    return [Document(page_content=c) for c in chunks if c.strip()]
+
+
+# ------------------------
+# Prompts (French output)
+# ------------------------
+FRENCH_STUFF_PROMPT = PromptTemplate(
+    input_variables=["text"],
+    template=(
+        "Tu es un assistant qui rédige en français.\n"
+        "Résume clairement, fidèlement et de façon structurée (titres, puces si utile).\n\n"
+        "Texte:\n{text}\n\n"
+        "Résumé (en français):"
+    ),
+)
+
+FRENCH_MAP_PROMPT = PromptTemplate(
+    input_variables=["text"],
+    template=(
+        "Tu es un assistant qui rédige en français. "
+        "Résume le passage suivant de manière claire et concise.\n\n"
+        "Passage:\n{text}\n\n"
+        "Résumé (en français):"
+    ),
+)
+
+FRENCH_COMBINE_PROMPT = PromptTemplate(
+    input_variables=["text"],
+    template=(
+        "Tu es un assistant qui rédige en français. "
+        "Tu reçois des résumés partiels.\n"
+        "Produit un résumé final clair, concis, fidèle, avec une structure lisible.\n\n"
+        "Résumés partiels:\n{text}\n\n"
+        "Résumé final (en français):"
+    ),
+)
+
+
+# ----------------------------
+# Manual map–reduce summarizer
+# ----------------------------
+def summarize_in_french(docs):
+    """Adaptive: direct (stuff) for short inputs; manual map–reduce for long."""
+    llm = get_llm()
+    total_chars = sum(len(d.page_content) for d in docs)
+
+    # Direct (stuff) for short inputs
+    if total_chars < 8000:
+        full_text = "\n\n".join(d.page_content for d in docs if d.page_content)
+        return llm.invoke(FRENCH_STUFF_PROMPT.format(text=full_text)).content.strip()
+
+    # Manual map–reduce for long inputs
+    partials = []
+    for d in docs:
+        if not d.page_content.strip():
+            continue
+        part = llm.invoke(FRENCH_MAP_PROMPT.format(text=d.page_content)).content.strip()
+        if part:
+            partials.append(part)
+
+    combined = "\n\n".join(partials)
+    return llm.invoke(FRENCH_COMBINE_PROMPT.format(text=combined)).content.strip()
+
+
+def make_image_prompt(summary_fr: str) -> str:
+    """Get a 1‑line image prompt from the FR summary."""
+    llm = get_llm()
+    prompt = (
+        "Écris uniquement un prompt d'image en UNE ligne, sans guillemets, "
+        "pour illustrer le résumé ci-dessous. Décris une scène visuelle claire, "
+        "avec quelques attributs concrets (lieu, ambiance, sujet), pas de texte superposé.\n\n"
+        f"Résumé:\n{summary_fr}"
+    )
+    return llm.invoke(prompt).content.strip()
+
+
+def generate_image(prompt: str):
+    """Call external image API and return a PIL Image or None."""
+    try:
+        r = requests.post(IMAGE_API_URL, json={"prompt": prompt}, timeout=60)
+        r.raise_for_status()
+        return Image.open(BytesIO(r.content))
+    except Exception as e:
+        st.error(f"Échec de la génération d'image: {e}")
+        return None
+
+
+# -----
+#  UI
+# -----
+st.set_page_config(page_title="Résumeur (FR) + vignette", page_icon="📝", layout="wide")
+st.title("📝 Résumeur en français + vignette")
+
+with st.expander("Paramètres", expanded=False):
+    st.write(f"Modèle: `{MODEL}`")
+    st.caption(
+        "Définissez OPENAI_API_KEY et (optionnel) OPENAI_BASE_URL / OPENAI_API_BASE pour une passerelle OpenAI‑compatible. "
+        "Définissez IMAGE_API_URL pour changer le service d'image."
+    )
+
+col_input, col_pdf = st.columns([2, 1])
+
+with col_input:
+    user_text_or_url = st.text_area(
+        "Entrer une URL ou coller du texte à résumer :",
+        height=180,
+        placeholder="https://exemple.com/article …  ou  collez du texte ici"
+    )
+
+with col_pdf:
+    uploaded = st.file_uploader("… ou bien, choisir un fichier PDF", type=["pdf"])
+
+source_text = ""
+if uploaded is not None:
+    with st.spinner("Extraction du PDF…"):
+        source_text = read_pdf_to_text(uploaded)
+        if not source_text:
+            st.error("Impossible d'extraire du texte de ce PDF.")
+elif user_text_or_url:
+    if validators.url(user_text_or_url):
+        if not (user_text_or_url.startswith("http://") or user_text_or_url.startswith("https://")):
+            st.error("URL non prise en charge (utiliser http/https).")
+        else:
+            with st.spinner("Chargement de la page…"):
+                try:
+                    source_text = load_url_to_text(user_text_or_url)
+                    if not source_text:
+                        st.warning("La page ne semble pas contenir de texte exploitable.")
+                except Exception as e:
+                    st.error(f"Impossible de charger l'URL: {e}")
+    else:
+        source_text = user_text_or_url
+
+if source_text:
+    with st.spinner("Découpage et résumé en français…"):
+        docs = split_to_docs(source_text)
+        if not docs:
+            st.error("Aucun contenu après découpage.")
+        else:
+            summary_fr = summarize_in_french(docs)
+
+    if source_text and docs:
+        with st.spinner("Création du prompt d'image…"):
+            image_prompt = make_image_prompt(summary_fr)
+
+        col1, col2 = st.columns([3, 1], gap="large")
+        with col1:
+            st.subheader("Résumé (FR)")
+            st.write(summary_fr)
+
+        with col2:
+            st.subheader("Vignette")
+            st.caption(image_prompt)
+            img = generate_image(image_prompt)
+            if img:
+                st.image(img, caption="Image générée")
+else:
+    st.info("Saisissez une URL, du texte, ou chargez un PDF pour commencer.")

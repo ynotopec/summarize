@@ -1,0 +1,127 @@
+import streamlit as st
+from langchain.chains.summarize import load_summarize_chain
+from langchain_community.chat_models import ChatOpenAI
+from langchain_community.document_loaders import WebBaseLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.docstore.document import Document
+from dotenv import load_dotenv
+import os
+from PyPDF2 import PdfReader
+import concurrent.futures
+import requests
+from PIL import Image
+from io import BytesIO
+import validators
+
+# Chargement .env
+load_dotenv()
+openai_api_model = os.environ.get("OPENAI_API_MODEL", "ai-summary")
+openai_api_base = os.environ.get("OPENAI_API_BASE")
+openai_api_key = os.environ.get("OPENAI_API_KEY")
+
+# Extraction PDF
+def upload_pdf():
+    uploaded_file = st.file_uploader("Choisissez un fichier PDF", type=["pdf"])
+    if uploaded_file is not None:
+        pdf_reader = PdfReader(uploaded_file)
+        text = ""
+        for page in pdf_reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text
+        return text
+    return None
+
+# Résumé parallèle map_reduce
+def summarize_parallel(long_text, llm, n_workers=4, chunk_size=8000):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=512)
+    chunks = splitter.split_text(long_text)
+    docs = [Document(page_content=t) for t in chunks]
+
+    def summarize_chunk(doc):
+        chain = load_summarize_chain(llm, chain_type="map_reduce")
+        return chain.combine_docs([doc])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+        mapped_summaries = list(executor.map(summarize_chunk, docs))
+
+    # Correction ici
+    summaries_texts = [
+        d["output_text"] if isinstance(d, dict) and "output_text" in d else
+        getattr(d, "page_content", str(d)) for d in mapped_summaries
+    ]
+
+    reduce_text = "\n\n".join(summaries_texts)
+    reduce_chunks = splitter.split_text(reduce_text)
+    reduce_docs = [Document(page_content=t) for t in reduce_chunks]
+    chain_reduce = load_summarize_chain(llm, chain_type="stuff")
+    final_summary = chain_reduce.run(reduce_docs)
+    return final_summary
+
+# Traduction via LLM
+def translate_text(text, llm, input_lang="English", output_lang="French"):
+    prompt = f"Translate this text from {input_lang} to {output_lang}:\n{text}"
+    return llm.invoke(prompt)
+
+# Générer un prompt d'image à partir du résumé
+def generate_image_prompt(text):
+    return f"Generate an illustration prompt from this summary:\n{text}\n(illustration, clear style, no text on image)"
+
+# Appel API image
+def make_image_request(prompt):
+    url = "https://api-txt2image.c0.ai-dev.numerique-interieur.com/generate_image/"
+    data = {"prompt": prompt}
+    response = requests.post(url, json=data)
+    if response.status_code == 200:
+        return Image.open(BytesIO(response.content))
+    else:
+        return None
+
+# Modèle LLM context long
+llm = ChatOpenAI(
+    temperature=0.2,
+    model_name=openai_api_model,
+    openai_api_base=openai_api_base,
+    openai_api_key=openai_api_key,
+    max_tokens=4096
+)
+
+st.title("Résumé Parallélisé + Traduction + Génération d’Image")
+
+user_input = st.text_area("Entrer une URL ou un texte :")
+pdf_text = upload_pdf()
+if pdf_text:
+    user_input = pdf_text
+
+if user_input:
+    with st.spinner('Résumé et traduction en cours...'):
+        if validators.url(user_input):
+            loader = WebBaseLoader(user_input)
+            docs = loader.load_and_split()
+            long_text = "\n".join([d.page_content for d in docs])
+        else:
+            long_text = user_input
+
+        # Résumé (en anglais)
+        summary_en = summarize_parallel(
+            long_text=long_text,
+            llm=llm,
+            n_workers=4,
+            chunk_size=8000
+        )
+
+        # Traduction en français
+        summary_fr = translate_text(summary_en, llm, input_lang="English", output_lang="French")
+
+        # Génération du prompt image à partir du résumé anglais (plus neutre pour les modèles d’image)
+        image_prompt = generate_image_prompt(summary_en)
+        img = make_image_request(image_prompt)
+
+    st.subheader('Résumé en français')
+    st.write(summary_fr, unsafe_allow_html=True)
+
+    st.subheader('Illustration automatique')
+    if img:
+        st.image(img, caption=image_prompt)
+    else:
+        st.warning("L’image n’a pas pu être générée.")

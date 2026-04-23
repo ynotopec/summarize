@@ -1,0 +1,16 @@
+streamlit
+requests
+python-dotenv
+pillow
+pdfplumber
+validators
+langchain
+langchain-openai
+langchain-community
+tiktoken
+bs4
+
+langchain-core
+langchain-text-splitters
+
+
