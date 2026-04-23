@@ -1,0 +1,131 @@
+import os
+import streamlit as st
+from dotenv import load_dotenv
+import requests
+from PIL import Image
+from io import BytesIO
+from langchain.chains.summarize import load_summarize_chain
+from langchain_openai import ChatOpenAI
+from langchain_community.document_loaders import WebBaseLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.docstore.document import Document
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from PyPDF2 import PdfReader
+import validators
+
+# Chargement des variables d'environnement
+load_dotenv()
+OPENAI_API_MODEL = os.getenv("OPENAI_API_MODEL", "gpt-3.5-turbo")
+OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Sécurité minimale
+if not (OPENAI_API_BASE and OPENAI_API_KEY):
+    st.error("OPENAI_API_BASE et OPENAI_API_KEY doivent être définis dans .env")
+    st.stop()
+
+def upload_pdf():
+    """Charge et extrait le texte d'un PDF uploadé par l'utilisateur."""
+    uploaded_file = st.file_uploader("Choisissez un fichier PDF", type=["pdf"])
+    if uploaded_file is not None:
+        reader = PdfReader(uploaded_file)
+        return "".join(page.extract_text() or "" for page in reader.pages)
+    return None
+
+def summarize_docs(text):
+    """Crée des chunks, puis résume via LLM."""
+    splitter = RecursiveCharacterTextSplitter()
+    docs = [Document(page_content=t) for t in splitter.split_text(text)]
+    llm = ChatOpenAI(temperature=0.2, model_name=OPENAI_API_MODEL)
+    chain = load_summarize_chain(llm, chain_type="refine")
+    summary = chain.invoke(docs)
+    # Résultat = dict ou string selon modèle, donc toujours string ici
+    return summary.get('output_text') if isinstance(summary, dict) else str(summary)
+
+def summarize_url(url):
+    """Charge une URL et résume le contenu via LLM."""
+    loader = WebBaseLoader(url)
+    docs = loader.load_and_split()
+    llm = ChatOpenAI(temperature=0.2, model_name=OPENAI_API_MODEL)
+    chain = load_summarize_chain(llm, chain_type="refine")
+    summary = chain.invoke(docs)
+    return summary.get('output_text') if isinstance(summary, dict) else str(summary)
+
+def generate_img_prompt(text):
+    """Construit un prompt image à partir d'un résumé."""
+    return f"Give an image prompt from context :\n{text}"
+
+def make_api_request(prompt):
+    """Appelle l'API OpenAI compatible pour générer un prompt image."""
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENAI_API_KEY}"
+    }
+    data = {
+        "model": OPENAI_API_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2
+    }
+    resp = requests.post(f"{OPENAI_API_BASE}/chat/completions", json=data, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
+# Templates de traduction (pour ChatOpenAI)
+system_prompt = SystemMessagePromptTemplate.from_template(
+    "You are a helpful assistant that translates {input_language} to {output_language}."
+)
+human_prompt = HumanMessagePromptTemplate.from_template(
+    "Translate this sentence from {input_language} to {output_language}: {text}"
+)
+chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
+
+def translate_text(text, input_lang="English", output_lang="French"):
+    """Traduction de texte via LLM (en français par défaut)."""
+    chat = ChatOpenAI(temperature=0, model_name=OPENAI_API_MODEL)
+    prompt_args = {
+        "input_language": input_lang,
+        "output_language": output_lang,
+        "text": text,
+    }
+    result = chat.invoke(chat_prompt.format_prompt(**prompt_args).to_messages())
+    # Selon version de LangChain, result.content ou simplement str(result)
+    return getattr(result, 'content', str(result))
+
+# --- UI Streamlit ---
+st.title("Résumé & Image IA")
+user_input = st.text_area("Entrer une URL ou un texte :")
+pdf_text = upload_pdf()
+if pdf_text:
+    user_input = pdf_text
+
+if user_input:
+    with st.spinner('Traitement en cours…'):
+        if validators.url(user_input):
+            summary_en = summarize_url(user_input)
+        else:
+            summary_en = summarize_docs(user_input)
+        summary_fr = translate_text(summary_en, input_lang="English", output_lang="French")
+
+    st.subheader('Résumé')
+    img_prompt = generate_img_prompt(summary_en)
+    img_api_data = make_api_request(img_prompt)
+    img_caption = img_api_data["choices"][0]["message"]["content"]
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.write(summary_fr, unsafe_allow_html=True)
+    with col2:
+        try:
+            img_resp = requests.post(
+                'https://api-txt2image.c0.ai-dev.numerique-interieur.com/generate_image/',
+                json={'prompt': img_caption}
+            )
+            img_resp.raise_for_status()
+            image = Image.open(BytesIO(img_resp.content))
+            st.image(image, caption=img_caption)
+        except Exception as e:
+            st.error(f"Erreur génération image : {e}")
