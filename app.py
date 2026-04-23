@@ -40,6 +40,8 @@ LANGS  = {"en":"English","fr":"Français","es":"Español","de":"Deutsch"}
 CTYPES = {"scientific":"Scientific Paper","general":"General Text","news":"News Article","technical":"Technical Documentation"}
 
 MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "300000"))  # cap entrée pour PDF/URL
+MAX_COMBINE_TOKENS = int(os.getenv("MAX_COMBINE_TOKENS", "24000"))  # cap fusion map-reduce
+MAX_COMBINE_CHARS = int(os.getenv("MAX_COMBINE_CHARS", "60000"))  # fallback si tokenizer indisponible
 ASYNC_CONCURRENCY = int(os.getenv("ASYNC_CONCURRENCY", "8"))  # invocations LLM simultanées
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 
@@ -166,7 +168,7 @@ async def adaptive_map_reduce(docs, llm, p_map, ctype_label, timeout=60):
             window = max(1, window // 2)
     return results
 
-def summarize_text(docs, lang_code="fr", ctype_key="general"):
+def summarize_text(docs, lang_code="fr", ctype_key="general", combine_max_tokens=MAX_COMBINE_TOKENS, combine_max_chars=MAX_COMBINE_CHARS):
     llm = get_llm()
     pr = PROMPTS.get(lang_code, PROMPTS["fr"])
     label = CTYPES[ctype_key]
@@ -179,7 +181,12 @@ def summarize_text(docs, lang_code="fr", ctype_key="general"):
 
     async def _run():
         parts = await adaptive_map_reduce(docs, llm, pr["map"], label)
-        combined = truncate_text("\n\n".join(parts), model_name=MODEL)
+        combined = truncate_text(
+            "\n\n".join(parts),
+            max_tokens=combine_max_tokens,
+            max_chars=combine_max_chars,
+            model_name=MODEL,
+        )
         return llm.invoke(pr["comb"].format(ctype=label, parts=combined, safe=SAFE_SUFFIX)).content.strip()
 
     res = run_async(_run())
@@ -189,9 +196,19 @@ def summarize_text(docs, lang_code="fr", ctype_key="general"):
     return res
 
 @st.cache_data(show_spinner=False)
-def summarize_source_text(source_text: str, lang_code="fr", ctype_key="general") -> str:
+def summarize_source_text(
+    source_text: str,
+    lang_code="fr",
+    ctype_key="general",
+    combine_max_tokens=MAX_COMBINE_TOKENS,
+    combine_max_chars=MAX_COMBINE_CHARS,
+) -> str:
     docs = split_to_docs(source_text, ctype_key)
-    return summarize_text(docs, lang_code, ctype_key) if docs else ""
+    return (
+        summarize_text(docs, lang_code, ctype_key, combine_max_tokens, combine_max_chars)
+        if docs
+        else ""
+    )
 
 # =========================
 # Image: retries + timeouts
@@ -246,6 +263,22 @@ with st.expander("Settings", expanded=False):
     ctype_key = next(k for k, v in CTYPES.items() if v == ctype_label)
     st.write(f"Text Model: `{MODEL}`")
     st.write(f"Image Model: `{IMAGE_MODEL}` @ `{IMAGE_SIZE}`")
+    max_input_chars = st.number_input(
+        "Input character cap",
+        min_value=50_000,
+        max_value=1_500_000,
+        value=MAX_INPUT_CHARS,
+        step=50_000,
+        help="If input is longer than this, the tail is dropped before summarization.",
+    )
+    combine_max_tokens = st.number_input(
+        "Map-reduce merge token cap",
+        min_value=4_000,
+        max_value=64_000,
+        value=MAX_COMBINE_TOKENS,
+        step=2_000,
+        help="Higher values preserve more partial summaries in the final merge.",
+    )
     st.caption(
         "Set OPENAI_API_KEY and optional OPENAI_BASE_URL/OPENAI_API_BASE for text.\n"
         "Set IMAGE_API_KEY (fallback: OPENAI_API_KEY) and IMAGE_BASE_URL for images."
@@ -276,18 +309,30 @@ elif user_text_or_url:
         source_text = user_text_or_url
 
 # Cap d’entrée pour éviter coûts/latence
-if source_text and len(source_text) > MAX_INPUT_CHARS:
-    source_text = source_text[:MAX_INPUT_CHARS] + "\n[INPUT_TRUNCATED]"
+was_input_truncated = False
+if source_text and len(source_text) > max_input_chars:
+    source_text = source_text[:max_input_chars] + "\n[INPUT_TRUNCATED]"
+    was_input_truncated = True
 
 if source_text:
     with st.spinner(f"Splitting and summarizing in {selected_lang_name}..."):
-        summary = summarize_source_text(source_text, lang_code, ctype_key)
+        summary = summarize_source_text(
+            source_text,
+            lang_code,
+            ctype_key,
+            combine_max_tokens=combine_max_tokens,
+            combine_max_chars=max(combine_max_tokens * 3, MAX_COMBINE_CHARS),
+        )
     if summary:
         col1, col2 = st.columns([3, 1], gap="large")
         with col1:
             st.subheader(f"Summary ({selected_lang_name})")
             st.write(summary)
             st.caption(f"Input length: {len(source_text):,} chars")
+            if was_input_truncated:
+                st.warning(
+                    "Input was truncated before summarization. Increase 'Input character cap' in Settings to keep more content."
+                )
         with st.spinner("Creating thumbnail..."):
             img, image_prompt = generate_thumbnail(summary, selected_lang_name)
         with col2:
