@@ -1,0 +1,7 @@
+.env
+
+# Versioned app files
+2app.py
+run.sh
+app.py-KO-*
+app.py-OK-*
