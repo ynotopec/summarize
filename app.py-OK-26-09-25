@@ -1,24 +1,27 @@
 # /home/ailab/summarize/app.py — prod-ready
-import os, base64, time, asyncio, ipaddress, requests, streamlit as st
+import os, io, base64, time, asyncio, ipaddress, requests, streamlit as st
 from io import BytesIO
 from dotenv import load_dotenv
 from PIL import Image
 import pdfplumber, validators
 from urllib import parse as urlparse
-#from langchain.docstore.document import Document
-from langchain_core.documents import Document
-#from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.docstore.document import Document
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import WebBaseLoader
-#from langchain_openai import ChatOpenAI
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
 # =========================
 # Config (LLM texte)
 # =========================
-MODEL = os.getenv("OPENAI_API_MODEL", "ai-summary")
+MODEL = os.getenv("OPENAI_API_MODEL", "mistral-small-3.2")
+#qwen3-coder")
+#gpt-oss")
+#qwen3-fast")
+#qwen3-coder")
+#ai-summary")
+#mistral-small-vllm")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 BASE_URL = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
 LLM_ARGS = {"model": MODEL, "temperature": 0.2}
@@ -37,7 +40,7 @@ IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "https://api.openai.com/v1")
 # App options
 # =========================
 LANGS  = {"en":"English","fr":"Français","es":"Español","de":"Deutsch"}
-CTYPES = {"scientific":"Scientific Paper","general":"General Text","news":"News Article","technical":"Technical Documentation"}
+CTYPES = {"general":"General Text","news":"News Article","scientific":"Scientific Paper","technical":"Technical Documentation"}
 
 MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "300000"))  # cap entrée pour PDF/URL
 ASYNC_CONCURRENCY = int(os.getenv("ASYNC_CONCURRENCY", "8"))  # invocations LLM simultanées
@@ -188,11 +191,6 @@ def summarize_text(docs, lang_code="fr", ctype_key="general"):
         return asyncio.get_event_loop().run_until_complete(res)
     return res
 
-@st.cache_data(show_spinner=False)
-def summarize_source_text(source_text: str, lang_code="fr", ctype_key="general") -> str:
-    docs = split_to_docs(source_text, ctype_key)
-    return summarize_text(docs, lang_code, ctype_key) if docs else ""
-
 # =========================
 # Image: retries + timeouts
 # =========================
@@ -281,7 +279,8 @@ if source_text and len(source_text) > MAX_INPUT_CHARS:
 
 if source_text:
     with st.spinner(f"Splitting and summarizing in {selected_lang_name}..."):
-        summary = summarize_source_text(source_text, lang_code, ctype_key)
+        docs = split_to_docs(source_text, ctype_key)
+        summary = summarize_text(docs, lang_code, ctype_key) if docs else ""
     if summary:
         col1, col2 = st.columns([3, 1], gap="large")
         with col1:
